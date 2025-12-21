@@ -1,0 +1,7 @@
+{
+    "name": "EchoNote AI",
+    "description": "A professional, minimalist recording app that uses Gemini to automatically generate structured notes and action items from your voice recordings.",
+    "requestFramePermissions": [
+      "microphone"
+    ]
+  }
