@@ -1,6 +1,6 @@
-# EchoNote - AI-Powered Meeting Transcription & Analysis
+# AI-Powered Meeting Transcription & Analysis
 
-EchoNote is an intelligent audio recording and transcription application that automatically transcribes meetings, identifies speakers, and generates structured notes with action items using AI.
+This is an intelligent audio recording and transcription application that automatically transcribes meetings, identifies speakers, and generates structured notes with action items using AI.
 
 ## 🎯 Features
 
@@ -188,35 +188,6 @@ ReadAI/
 - Supabase anon keys are safe for client-side use (they have Row Level Security)
 - Google API keys should be kept secure and not exposed in client-side code
 
-## 🐛 Troubleshooting
-
-### Backend Issues
-
-**CUDA/GPU not detected:**
-- The application will automatically fall back to CPU processing
-- CPU processing is slower but functional
-
-**FFmpeg not found:**
-- Install FFmpeg and ensure it's in your system PATH
-- Windows: Download from [ffmpeg.org](https://ffmpeg.org/download.html)
-- macOS: `brew install ffmpeg`
-- Linux: `sudo apt-get install ffmpeg`
-
-**Model download issues:**
-- First run will download WhisperX and pyannote models (several GB)
-- Ensure stable internet connection
-- Models are cached locally after first download
-
-### Frontend Issues
-
-**Backend connection failed:**
-- Check that backend is running on port 8000
-- Verify `VITE_API_URL` in frontend `.env` file
-- Application will use Supabase storage as fallback
-
-**Supabase errors:**
-- Supabase is optional - application works without it
-- If configured, verify credentials in `.env` file
 
 ## 📝 Development
 
@@ -227,25 +198,6 @@ ReadAI/
 cd ReadAI
 npm run build
 ```
-
-**Backend:**
-The backend runs directly with Python. For production, consider using:
-- Gunicorn or uvicorn with multiple workers
-- Process managers like PM2 or systemd
-- Reverse proxy (nginx) for serving static files
-
-### Code Style
-
-- Frontend: ESLint is configured - run `npm run lint` to check
-- Backend: Follow PEP 8 Python style guide
-
-## 📄 License
-
-[Add your license here]
-
-## 🤝 Contributing
-
-[Add contribution guidelines here]
 
 ## 🙏 Acknowledgments
 
