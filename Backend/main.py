@@ -199,18 +199,28 @@ class SpeakerDiarizationPipeline:
         self,
         whisper_model: str = "large-v3",
         device: str = None,
-        compute_type: str = "float16",
+        compute_type: str = None,
         batch_size: int = 16
     ):
         self.whisper_model = whisper_model
         self.batch_size = batch_size
-        self.compute_type = compute_type
-        
-        # Auto-detect device
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-            
-        logger.info(f"Using device: {self.device}")
-        
+
+        # Auto-detect device and matching compute type
+        if device:
+            self.device = device
+            self.compute_type = compute_type or "float16"
+        elif torch.cuda.is_available():
+            self.device = "cuda"
+            self.compute_type = compute_type or "float16"
+        elif torch.backends.mps.is_available():
+            self.device = "mps"
+            self.compute_type = compute_type or "float32"  # float16 unstable on MPS
+        else:
+            self.device = "cpu"
+            self.compute_type = compute_type or "int8"
+
+        logger.info(f"Using device: {self.device}, compute_type: {self.compute_type}")
+
         if self.device == "cuda":
             logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
         
@@ -239,6 +249,7 @@ class SpeakerDiarizationPipeline:
             self.diarization = Pipeline.from_pretrained(
                 "pyannote/speaker-diarization-3.1"
             )
+            # pyannote has known issues with MPS; only move to GPU for CUDA
             if self.device == "cuda":
                 self.diarization.to(torch.device("cuda"))
     
@@ -1110,4 +1121,5 @@ async def generate_notes(job_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("BACKEND_PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
