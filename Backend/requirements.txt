@@ -4,11 +4,11 @@ pyannote.audio
 tiktoken
 hf_xet
 
-# PyTorch with CUDA support (Windows/Linux)
-# Install using: pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu121
-torch
+# PyTorch — Mac (Apple Silicon): pip install -r requirements.txt
+# Windows/Linux CUDA: pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu121
+torch>=2.0.0,<2.1.0
 torchvision
-torchaudio
+torchaudio>=2.0.0,<2.1.0
 
 # Additional required dependencies
 faster-whisper
