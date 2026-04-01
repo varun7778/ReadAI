@@ -2,9 +2,17 @@ import { useState } from 'react'
 import reactLogo from './assets/react.svg'
 import viteLogo from '/vite.svg'
 import './App.css'
+import Login from './Login.jsx'
 
 function App() {
+  const [loggedIn, setLoggedIn] = useState(
+    () => localStorage.getItem('readai_logged_in') === 'true'
+  )
   const [count, setCount] = useState(0)
+
+  if (!loggedIn) {
+    return <Login onLogin={() => setLoggedIn(true)} />
+  }
 
   return (
     <>

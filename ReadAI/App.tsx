@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Plus, Trash2, CheckCircle2, ListTodo, FileText, Share2, Info, X, CloudCheck, CloudUpload, RefreshCw, Menu, Wand2, Trash, MicOff, Edit2, Check } from 'lucide-react';
+import { Search, Plus, Trash2, CheckCircle2, ListTodo, FileText, Share2, Info, X, CloudUpload, RefreshCw, Menu, Wand2, Trash, MicOff, Edit2, Check } from 'lucide-react';
 import { Recording } from './types';
 import { apiService } from './services/apiService';
 import Recorder from './components/Recorder';
@@ -89,7 +89,7 @@ const TitleEditor: React.FC<TitleEditorProps> = ({ title, onSave, isProcessing }
   );
 };
 
-const App: React.FC = () => {
+const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth >= 1024);
@@ -338,15 +338,12 @@ const App: React.FC = () => {
           </div>
 
           <div className="pt-6 border-t border-zinc-900/50 mt-4 px-2">
-            <div className="flex items-center gap-2 text-[10px] font-bold text-zinc-600">
-               {syncStatus === 'syncing' ? (
-                 <><RefreshCw size={12} className="animate-spin text-indigo-500" /> Syncing...</>
-               ) : syncStatus === 'saved' ? (
-                 <><CloudCheck size={12} className="text-emerald-500" /> Saved</>
-               ) : (
-                 <><CloudUpload size={12} className="opacity-50" /> Cloud Backup Active</>
-               )}
-            </div>
+            <button
+              onClick={onLogout}
+              className="w-full text-left text-[10px] font-bold text-zinc-600 hover:text-red-400 transition-colors"
+            >
+              Sign out
+            </button>
           </div>
         </div>
       </aside>
