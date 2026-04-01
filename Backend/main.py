@@ -306,7 +306,7 @@ class SpeakerDiarizationPipeline:
         logger.info("Performing speaker diarization...")
         
         import torchaudio
-        waveform, sample_rate = torchaudio.load(audio_path)
+        waveform, sample_rate = torchaudio.load(audio_path, backend="soundfile")
         
         # pyannote 4.x expects a dict with waveform and sample_rate
         audio_input = {

@@ -17,6 +17,7 @@ torchaudio
 transformers
 pyannote.core
 
+soundfile
 fastapi
 uvicorn
 python-multipart
