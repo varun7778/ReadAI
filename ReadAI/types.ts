@@ -5,6 +5,7 @@ export interface Recording {
     timestamp: number;
     duration: number; // in seconds
     audioUrl?: string;
+    transcriptUrl?: string;
     status: 'recording' | 'processing' | 'completed' | 'error';
     transcript?: string;
     notes: string[];
@@ -15,5 +16,6 @@ export interface Recording {
     summary: string;
     notes: string[];
     actionItems: string[];
+    transcriptUrl?: string;
   }
   

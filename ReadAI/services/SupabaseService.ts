@@ -1,16 +1,12 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { Recording } from '../types';
 
-/**
- * Supabase service for storing audio files when backend is unavailable
- */
+type Folder = 'recordings' | 'fallback';
 
 class SupabaseService {
   private supabase: SupabaseClient | null = null;
   private bucketName = 'audio-recordings';
 
-  /**
-   * Initialize Supabase client
-   */
   async initialize(): Promise<boolean> {
     try {
       const env = (import.meta as any).env || {};
@@ -23,7 +19,6 @@ class SupabaseService {
       }
 
       this.supabase = createClient(url, key);
-      console.log('Supabase initialized successfully');
       return true;
     } catch (error) {
       console.error('Failed to initialize Supabase:', error);
@@ -31,75 +26,178 @@ class SupabaseService {
     }
   }
 
+  private async getClient(): Promise<SupabaseClient | null> {
+    if (!this.supabase) {
+      const initialized = await this.initialize();
+      if (!initialized) return null;
+    }
+    return this.supabase;
+  }
+
   /**
-   * Upload audio file to Supabase Storage
-   * Returns the public URL
+   * Upload audio blob.
+   * @param folder 'recordings' for normal, 'fallback' when backend was unavailable.
    */
-  async uploadAudio(blob: Blob, filename: string): Promise<string | null> {
+  async uploadAudio(blob: Blob, filename: string, folder: Folder = 'recordings'): Promise<string | null> {
     try {
-      // Initialize if not already done
-      if (!this.supabase) {
-        const initialized = await this.initialize();
-        if (!initialized) {
-          throw new Error('Supabase not initialized');
-        }
-      }
+      const client = await this.getClient();
+      if (!client) throw new Error('Supabase client not available');
 
-      if (!this.supabase) {
-        throw new Error('Supabase client not available');
-      }
-
-      // Upload file to Supabase Storage
-      const { data, error } = await this.supabase.storage
+      const path = `${folder}/${filename}`;
+      const { error } = await client.storage
         .from(this.bucketName)
-        .upload(filename, blob, {
-          contentType: 'audio/mpeg',
-          upsert: true, // Overwrite if exists
-        });
+        .upload(path, blob, { contentType: 'audio/mpeg', upsert: true });
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
-      // Get public URL
-      const { data: urlData } = this.supabase.storage
-        .from(this.bucketName)
-        .getPublicUrl(filename);
-
-      console.log('File uploaded to Supabase:', urlData.publicUrl);
+      const { data: urlData } = client.storage.from(this.bucketName).getPublicUrl(path);
+      console.log(`Audio uploaded [${folder}]:`, urlData.publicUrl);
       return urlData.publicUrl;
-
     } catch (error) {
-      console.error('Supabase upload failed:', error);
+      console.error('Supabase audio upload failed:', error);
       return null;
     }
   }
 
   /**
-   * Delete audio file from Supabase Storage
+   * Upload recording metadata as a JSON sidecar alongside the audio.
+   * Always stored in 'fallback/' — this is how we recover recordings after backend comes back.
    */
-  async deleteAudio(filename: string): Promise<boolean> {
+  async uploadMetadata(recording: Recording): Promise<void> {
     try {
-      if (!this.supabase) {
-        await this.initialize();
-      }
+      const client = await this.getClient();
+      if (!client) return;
 
-      if (!this.supabase) {
-        return false;
-      }
-
-      const { error } = await this.supabase.storage
+      const blob = new Blob([JSON.stringify(recording)], { type: 'application/json' });
+      const path = `fallback/${recording.id}.json`;
+      const { error } = await client.storage
         .from(this.bucketName)
-        .remove([filename]);
+        .upload(path, blob, { contentType: 'application/json', upsert: true });
 
+      if (error) throw error;
+    } catch (error) {
+      console.error('Supabase metadata upload failed:', error);
+    }
+  }
+
+  /**
+   * Download metadata sidecar for a recording in the fallback folder.
+   */
+  async downloadMetadata(id: string): Promise<Recording | null> {
+    try {
+      const client = await this.getClient();
+      if (!client) return null;
+
+      const { data, error } = await client.storage
+        .from(this.bucketName)
+        .download(`fallback/${id}.json`);
+
+      if (error) throw error;
+      return JSON.parse(await data.text()) as Recording;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Upload full transcript text as a .txt file alongside the audio.
+   * Stored at recordings/{id}.txt or fallback/{id}.txt.
+   */
+  async uploadTranscript(id: string, text: string, folder: Folder = 'recordings'): Promise<string | null> {
+    try {
+      const client = await this.getClient();
+      if (!client) return null;
+
+      const path = `${folder}/${id}.txt`;
+      const blob = new Blob([text], { type: 'text/plain' });
+      const { error } = await client.storage
+        .from(this.bucketName)
+        .upload(path, blob, { contentType: 'text/plain', upsert: true });
+
+      if (error) throw error;
+
+      const { data: urlData } = client.storage.from(this.bucketName).getPublicUrl(path);
+      return urlData.publicUrl;
+    } catch (error) {
+      console.error('Supabase transcript upload failed:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Download audio blob from a given folder.
+   */
+  async downloadAudio(filename: string, folder: Folder = 'recordings'): Promise<Blob | null> {
+    try {
+      const client = await this.getClient();
+      if (!client) return null;
+
+      const { data, error } = await client.storage
+        .from(this.bucketName)
+        .download(`${folder}/${filename}`);
+
+      if (error) throw error;
+      return data;
+    } catch (error) {
+      console.error('Failed to download audio from Supabase:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Move a recording from fallback/ to recordings/ (copies audio, deletes fallback files).
+   * Returns the new public URL.
+   */
+  async promoteFromFallback(id: string): Promise<string | null> {
+    try {
+      const client = await this.getClient();
+      if (!client) return null;
+
+      // Download audio from fallback
+      const blob = await this.downloadAudio(`${id}.mp3`, 'fallback');
+      if (!blob) throw new Error('Audio not found in fallback');
+
+      // Upload to recordings/
+      const url = await this.uploadAudio(blob, `${id}.mp3`, 'recordings');
+      if (!url) throw new Error('Failed to upload to recordings/');
+
+      // Delete fallback copies
+      await client.storage
+        .from(this.bucketName)
+        .remove([`fallback/${id}.mp3`, `fallback/${id}.json`]);
+
+      console.log(`Promoted recording ${id} from fallback to recordings`);
+      return url;
+    } catch (error) {
+      console.error('Failed to promote recording from fallback:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Delete audio (and metadata sidecar if present) from both folders.
+   */
+  async deleteAudio(filename: string, folder?: Folder): Promise<boolean> {
+    try {
+      const client = await this.getClient();
+      if (!client) return false;
+
+      const base = filename.replace(/\.mp3$/, '');
+      const paths: string[] = folder
+        ? [`${folder}/${filename}`, `${folder}/${base}.json`, `${folder}/${base}.txt`]
+        : [
+            `recordings/${filename}`,
+            `recordings/${base}.txt`,
+            `fallback/${filename}`,
+            `fallback/${base}.json`,
+          ];
+
+      const { error } = await client.storage.from(this.bucketName).remove(paths);
       if (error) {
         console.error('Failed to delete from Supabase:', error);
         return false;
       }
-
-      console.log('File deleted from Supabase:', filename);
       return true;
-
     } catch (error) {
       console.error('Supabase delete failed:', error);
       return false;
@@ -107,68 +205,30 @@ class SupabaseService {
   }
 
   /**
-   * Download audio file from Supabase Storage
+   * List recording IDs that have a metadata sidecar in fallback/ (i.e. need recovery).
    */
-  async downloadAudio(filename: string): Promise<Blob | null> {
+  async listFallbackIds(): Promise<string[]> {
     try {
-      if (!this.supabase) {
-        await this.initialize();
-      }
+      const client = await this.getClient();
+      if (!client) return [];
 
-      if (!this.supabase) {
-        return null;
-      }
-
-      const { data, error } = await this.supabase.storage
+      const { data, error } = await client.storage
         .from(this.bucketName)
-        .download(filename);
+        .list('fallback');
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
-      return data;
-
+      return data
+        .filter(f => f.name.endsWith('.json'))
+        .map(f => f.name.replace(/\.json$/, ''));
     } catch (error) {
-      console.error('Failed to download from Supabase:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Check if Supabase is available
-   */
-  isAvailable(): boolean {
-    return !!this.supabase;
-  }
-
-  /**
-   * List all audio files in Supabase Storage
-   */
-  async listAudio(): Promise<string[]> {
-    try {
-      if (!this.supabase) {
-        await this.initialize();
-      }
-
-      if (!this.supabase) {
-        return [];
-      }
-
-      const { data, error } = await this.supabase.storage
-        .from(this.bucketName)
-        .list();
-
-      if (error) {
-        throw error;
-      }
-
-      return data.map(file => file.name);
-
-    } catch (error) {
-      console.error('Failed to list files from Supabase:', error);
+      console.error('Failed to list fallback files:', error);
       return [];
     }
+  }
+
+  isAvailable(): boolean {
+    return !!this.supabase;
   }
 }
 

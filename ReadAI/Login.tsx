@@ -11,7 +11,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (username === 'varun' && password === 'Password') {
+    if (username === import.meta.env.VITE_LOGIN_USERNAME && password === import.meta.env.VITE_LOGIN_PASSWORD) {
       localStorage.setItem('readai_logged_in', 'true');
       onLogin();
     } else {

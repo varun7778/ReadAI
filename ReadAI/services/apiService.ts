@@ -2,323 +2,268 @@
 import { Recording, GeminiResponse } from "../types";
 import { supabaseService } from "./SupabaseService";
 
-// Backend API base URL
 const API_BASE_URL = (import.meta as any).env?.VITE_API_URL;
 
-/**
- * Check if backend is available
- */
 async function isBackendAvailable(): Promise<boolean> {
   try {
     const response = await fetch(`${API_BASE_URL}`, {
       method: 'GET',
-      signal: AbortSignal.timeout(3000), // 3 second timeout
+      signal: AbortSignal.timeout(3000),
     });
     return response.ok;
-  } catch (error) {
-    console.warn('Backend not available:', error);
+  } catch {
     return false;
   }
 }
 
-/**
- * Service to handle data persistence and external API calls.
- */
 export const apiService = {
   /**
-   * Fetches all recordings from the backend
+   * Fetches all recordings from the backend.
+   * Returns empty list if backend is unavailable — fallback recordings are
+   * loaded separately via processFallbackRecordings().
    */
   async getRecordings(): Promise<Recording[]> {
     try {
       const available = await isBackendAvailable();
-      if (!available) {
-        // Fallback to localStorage
-        const saved = localStorage.getItem('echo-recordings');
-        return saved ? JSON.parse(saved) : [];
-      }
+      if (!available) return [];
 
       const response = await fetch(`${API_BASE_URL}/recordings`, {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
       });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch recordings: ${response.statusText}`);
-      }
-
-      const recordings = await response.json();
-      return recordings;
+      if (!response.ok) throw new Error(`Failed to fetch recordings: ${response.statusText}`);
+      return await response.json();
     } catch (error) {
       console.error('Error fetching recordings:', error);
-      // Fallback to localStorage
-      const saved = localStorage.getItem('echo-recordings');
-      return saved ? JSON.parse(saved) : [];
+      return [];
     }
   },
 
   /**
-   * Persists a single recording to the backend
-   * If backend is unavailable and audioBlob is provided, stores it in Mega.nz
+   * Persists a single recording.
+   *
+   * When audioBlob is provided (new recording):
+   *   - Backend available   → audio to Supabase 'recordings/', metadata to backend
+   *   - Backend unavailable → audio + metadata JSON sidecar to Supabase 'fallback/'
+   *
+   * When no audioBlob (metadata update):
+   *   - Backend available   → update backend
+   *   - Backend unavailable → update metadata JSON sidecar in 'fallback/'
    */
-  async saveRecording(recording: Recording, audioBlob?: Blob): Promise<void> {
-    const saveFallback = async () => {
-      // Try to store blob in Mega.nz if provided
-      if (audioBlob) {
-        try {
-          const filename = `${recording.id}.mp3`;
-          const megaUrl = await supabaseService.uploadAudio(audioBlob, filename);
-          if (megaUrl) {
-            recording.audioUrl = megaUrl;
-            console.log('Audio stored in Mega.nz:', megaUrl);
-          }
-        } catch (megaError) {
-          console.error('Mega.nz upload failed:', megaError);
-        }
-      }
-      
-      // Fallback to localStorage
-      // const saved = localStorage.getItem('echo-recordings');
-      // const recordings: Recording[] = saved ? JSON.parse(saved) : [];
-      // const index = recordings.findIndex(r => r.id === recording.id);
-      
-      // if (index > -1) {
-      //   recordings[index] = recording;
-      // } else {
-      //   recordings.unshift(recording);
-      // }
-      
-      // localStorage.setItem('echo-recordings', JSON.stringify(recordings));
-    };
-
+  async saveRecording(recording: Recording, audioBlob?: Blob): Promise<Recording> {
     try {
       const available = await isBackendAvailable();
+
       if (!available) {
-        await saveFallback();
-        return;
+        if (audioBlob) {
+          const url = await supabaseService.uploadAudio(audioBlob, `${recording.id}.mp3`, 'fallback');
+          if (url) recording.audioUrl = url;
+        }
+        // Always persist metadata sidecar in fallback/ so startup recovery can find it
+        await supabaseService.uploadMetadata(recording);
+        return recording;
+      }
+
+      // Backend available
+      if (audioBlob) {
+        const url = await supabaseService.uploadAudio(audioBlob, `${recording.id}.mp3`, 'recordings');
+        if (url) recording.audioUrl = url;
       }
 
       const response = await fetch(`${API_BASE_URL}/recordings`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(recording),
       });
+      if (!response.ok) throw new Error(`Failed to save recording: ${response.statusText}`);
 
-      if (!response.ok) {
-        throw new Error(`Failed to save recording: ${response.statusText}`);
-      }
     } catch (error) {
       console.error('Error saving recording:', error);
-      await saveFallback();
+      // If backend call failed but we had a blob, move it to fallback
+      if (audioBlob) {
+        const url = await supabaseService.uploadAudio(audioBlob, `${recording.id}.mp3`, 'fallback');
+        if (url) recording.audioUrl = url;
+      }
+      await supabaseService.uploadMetadata(recording);
     }
+
+    return recording;
   },
 
   /**
-   * Deletes a recording from the backend
+   * Deletes a recording from backend and Supabase (both folders + metadata sidecars).
    */
   async deleteRecording(id: string): Promise<void> {
+    await supabaseService.deleteAudio(`${id}.mp3`);
+
     try {
       const available = await isBackendAvailable();
-      if (!available) {
-        // Fallback to localStorage
-        const saved = localStorage.getItem('echo-recordings');
-        if (saved) {
-          const recordings: Recording[] = JSON.parse(saved);
-          const filtered = recordings.filter(r => r.id !== id);
-          localStorage.setItem('echo-recordings', JSON.stringify(filtered));
-        }
-        return;
-      }
+      if (!available) return;
 
       const response = await fetch(`${API_BASE_URL}/recordings/${id}`, {
         method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
       });
-
-      if (!response.ok) {
-        throw new Error(`Failed to delete recording: ${response.statusText}`);
-      }
+      if (!response.ok) throw new Error(`Failed to delete recording: ${response.statusText}`);
     } catch (error) {
-      console.error('Error deleting recording:', error);
-      // Fallback to localStorage
-      const saved = localStorage.getItem('echo-recordings');
-      if (saved) {
-        const recordings: Recording[] = JSON.parse(saved);
-        const filtered = recordings.filter(r => r.id !== id);
-        localStorage.setItem('echo-recordings', JSON.stringify(filtered));
-      }
+      console.error('Error deleting recording from backend:', error);
     }
   },
 
   /**
-   * Sends audio to the backend for processing
-   * Uses /transcribe endpoint, then polls for completion, then calls /generate/notes
-   * Falls back to Mega.nz if backend is unavailable
+   * Sends audio to the backend for transcription and note generation.
+   * Throws if backend is unavailable — caller should leave recording in 'error' status
+   * so it can be retried on next startup via processFallbackRecordings().
    */
   async processAudio(mimeType: string, recordingId: string, audioBlob: Blob): Promise<GeminiResponse> {
-    try {
-      const available = await isBackendAvailable();
-      
-      if (!available) {
-        // Backend unavailable - store in Mega.nz
-        if (audioBlob) {
-          const filename = `${recordingId}.mp3`;
-          const megaUrl = await supabaseService.uploadAudio(audioBlob, filename);
-          
-          if (megaUrl) {
-            console.log('Audio stored in Mega.nz:', megaUrl);
-            // Return a placeholder response since we can't process without backend
-            return {
-              summary: "Audio file stored in cloud storage. Processing will resume when backend is available.",
-              notes: [],
-              actionItems: []
-            };
-          }
-        }
-        
-        throw new Error('Backend unavailable and Mega.nz upload failed');
-      }
+    const available = await isBackendAvailable();
+    if (!available) {
+      throw new Error('BACKEND_UNAVAILABLE');
+    }
 
-      // Step 1: Upload audio using /transcribe endpoint
-      const formData = new FormData();
-      const audioFile = new File([audioBlob!], `${recordingId}.mp3`, { type: mimeType });
-      formData.append('file', audioFile);
-      formData.append('formats', 'txt,json');
-      formData.append('recording_id', recordingId);
+    // Step 1: Transcribe
+    const formData = new FormData();
+    formData.append('file', new File([audioBlob], `${recordingId}.mp3`, { type: mimeType }));
+    formData.append('formats', 'txt,json');
+    formData.append('recording_id', recordingId);
 
-      const transcribeResponse = await fetch(`${API_BASE_URL}/transcribe`, {
-        method: 'POST',
-        body: formData,
-      });
+    const transcribeResponse = await fetch(`${API_BASE_URL}/transcribe`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!transcribeResponse.ok) {
+      throw new Error(`Failed to upload audio: ${transcribeResponse.statusText}`);
+    }
 
-      if (!transcribeResponse.ok) {
-        throw new Error(`Failed to upload audio: ${transcribeResponse.statusText}`);
-      }
+    const { job_id: jobId } = await transcribeResponse.json();
 
-      const transcribeResult = await transcribeResponse.json();
-      const jobId = transcribeResult.job_id;
+    // Step 2: Poll for completion
+    let status = 'queued';
+    let attempts = 0;
+    while (status !== 'completed' && status !== 'failed' && attempts < 200) {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      const statusResponse = await fetch(`${API_BASE_URL}/status/${jobId}`);
+      if (!statusResponse.ok) throw new Error(`Failed to check status: ${statusResponse.statusText}`);
+      const statusData = await statusResponse.json();
+      status = statusData.status;
+      attempts++;
+      if (status === 'failed') throw new Error(statusData.error || 'Processing failed');
+    }
+    if (status !== 'completed') throw new Error('Processing timed out');
 
-      // Step 2: Poll for completion
-      let status = 'queued';
-      let attempts = 0;
-      const maxAttempts = 200; // 5 minutes max (1 second intervals)
-      
-      while (status !== 'completed' && status !== 'failed' && attempts < maxAttempts) {
-        await new Promise(resolve => setTimeout(resolve, 1500)); // Wait 1.5 second
-        
-        const statusResponse = await fetch(`${API_BASE_URL}/status/${jobId}`);
-        if (!statusResponse.ok) {
-          throw new Error(`Failed to check status: ${statusResponse.statusText}`);
-        }
-        
-        const statusData = await statusResponse.json();
-        status = statusData.status;
-        attempts++;
-        
-        if (status === 'failed') {
-          throw new Error(statusData.error || 'Processing failed');
-        }
-      }
+    // Step 3: Check for empty transcript and extract full text
+    const finalStatus = await (await fetch(`${API_BASE_URL}/status/${jobId}`)).json();
+    const segments = finalStatus.result?.segments || [];
+    const hasContent = segments.some((seg: any) => (seg.text || '').trim().length > 0);
 
-      if (status !== 'completed') {
-        throw new Error('Processing timed out');
-      }
+    if (!hasContent) {
+      await this.deleteRecording(recordingId).catch(() => {});
+      throw new Error('EMPTY_AUDIO');
+    }
 
-      // Check the transcript and if it is empty, delete the recording
-      const finalStatusResponse = await fetch(`${API_BASE_URL}/status/${jobId}`);
-      if (!finalStatusResponse.ok) {
-        throw new Error(`Failed to get final status: ${finalStatusResponse.statusText}`);
-      }
-      
-      const finalStatusData = await finalStatusResponse.json();
-      const segments = finalStatusData.result?.segments || [];
-      
-      // Check if transcript is empty (no segments or all segments have empty text)
-      const hasValidTranscript = segments.length > 0 && segments.some((seg: any) => {
-        const text = seg.text || '';
-        return text.trim().length > 0;
-      });
-      
-      if (!hasValidTranscript) {
-        // Delete the recording since transcript is empty
-        try {
-          await this.deleteRecording(recordingId);
-          console.log(`Deleted empty recording: ${recordingId}`);
-        } catch (deleteError) {
-          console.error('Failed to delete empty recording:', deleteError);
-        }
-        
-        // Throw a specific error that the frontend can handle
+    const formatTime = (seconds: number) => {
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const s = Math.floor(seconds % 60);
+      const mm = String(m).padStart(2, '0');
+      const ss = String(s).padStart(2, '0');
+      return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+    };
+
+    const fullTranscript = segments
+      .filter((seg: any) => (seg.text || '').trim())
+      .map((seg: any) => {
+        const timestamp = `[${formatTime(seg.start ?? 0)}]`;
+        const speaker = seg.speaker ? `${seg.speaker}: ` : '';
+        return `${timestamp} ${speaker}${seg.text.trim()}`;
+      })
+      .join('\n');
+
+    // Upload transcript to Supabase Storage as recordings/{id}.txt
+    const transcriptUrl = await supabaseService.uploadTranscript(recordingId, fullTranscript, 'recordings');
+
+    // Step 4: Generate notes
+    const notesResponse = await fetch(`${API_BASE_URL}/generate/notes/${jobId}`, { method: 'POST' });
+    if (!notesResponse.ok) {
+      const err = await notesResponse.json().catch(() => ({}));
+      if (notesResponse.status === 400 && err.detail?.includes('empty')) {
+        await this.deleteRecording(recordingId).catch(() => {});
         throw new Error('EMPTY_AUDIO');
       }
-
-      // Step 3: Generate notes using /generate/notes endpoint
-      const notesResponse = await fetch(`${API_BASE_URL}/generate/notes/${jobId}`, {
-        method: 'POST',
-      });
-
-      if (!notesResponse.ok) {
-        const errorData = await notesResponse.json().catch(() => ({}));
-        // If recording was deleted due to empty audio, throw a specific error
-        if (notesResponse.status === 400 && errorData.detail?.includes('empty')) {
-          // Try to delete the recording if backend hasn't already
-          try {
-            await this.deleteRecording(recordingId);
-          } catch (deleteError) {
-            console.error('Failed to delete empty recording:', deleteError);
-          }
-          throw new Error('EMPTY_AUDIO');
-        }
-        throw new Error(`Failed to generate notes: ${notesResponse.statusText}`);
-      }
-
-      const notesResult = await notesResponse.json();
-      const notesData = notesResult.notes;
-
-      // Extract summary, notes, and actionItems from the response
-      const summary = notesData.recap || "";
-      const chapters = notesData.chapters || [];
-      const actionItemsData = notesData.actionItems || [];
-
-      // Format notes from chapters
-      const notes = chapters.map((ch: any) => 
-        `${ch.title || "Topic"}: ${ch.summary || ""}`
-      );
-
-      // Format action items
-      const actionItems = actionItemsData.map((item: any) => {
-        const assignee = item.assignee || "Someone";
-        const action = item.action || "";
-        return `${assignee} will ${action}`;
-      });
-
-      return {
-        summary: summary || "Meeting processed successfully",
-        notes: notes,
-        actionItems: actionItems,
-      };
-    } catch (error) {
-      console.error('Error processing audio:', error);
-      
-      // If backend fails during processing, try to save to Mega.nz
-      if (audioBlob) {
-        try {
-          const filename = `${recordingId}.mp3`;
-          const megaUrl = await supabaseService.uploadAudio(audioBlob, filename);
-          if (megaUrl) {
-            console.log('Audio stored in Mega.nz as fallback:', megaUrl);
-          }
-        } catch (megaError) {
-          console.error('Mega.nz fallback also failed:', megaError);
-        }
-      }
-      
-      throw error;
+      throw new Error(`Failed to generate notes: ${notesResponse.statusText}`);
     }
-  }
+
+    const notesData = (await notesResponse.json()).notes;
+    return {
+      summary: notesData.recap || "Meeting processed successfully",
+      notes: (notesData.chapters || []).map((ch: any) => `${ch.title || "Topic"}: ${ch.summary || ""}`),
+      actionItems: (notesData.actionItems || []).map((item: any) => `${item.assignee || "Someone"} will ${item.action || ""}`),
+      transcriptUrl: transcriptUrl ?? undefined,
+    };
+  },
+
+  /**
+   * Called on startup. Finds any recordings in Supabase 'fallback/' that haven't been
+   * processed yet, attempts to process them, and promotes them to 'recordings/' on success.
+   *
+   * @param onUpdate  Called for each recording as its status changes, so the UI can update live.
+   */
+  async processFallbackRecordings(onUpdate: (recording: Recording) => void): Promise<void> {
+    const available = await isBackendAvailable();
+    if (!available) return;
+
+    const fallbackIds = await supabaseService.listFallbackIds();
+    if (fallbackIds.length === 0) return;
+
+    console.log(`Found ${fallbackIds.length} fallback recording(s) to recover:`, fallbackIds);
+
+    for (const id of fallbackIds) {
+      // Load stored metadata
+      const metadata = await supabaseService.downloadMetadata(id);
+      if (!metadata) {
+        console.warn(`No metadata sidecar found for fallback recording ${id}, skipping`);
+        continue;
+      }
+
+      // Show as "processing" in the UI immediately
+      const recovering: Recording = { ...metadata, status: 'processing' };
+      onUpdate(recovering);
+
+      try {
+        // Download the audio blob from fallback/
+        const blob = await supabaseService.downloadAudio(`${id}.mp3`, 'fallback');
+        if (!blob) throw new Error(`Audio blob missing for ${id}`);
+
+        // Process through backend
+        const result = await this.processAudio('audio/mpeg', id, blob);
+
+        // Move audio from fallback/ to recordings/ and get new URL
+        const newAudioUrl = await supabaseService.promoteFromFallback(id);
+
+        const completed: Recording = {
+          ...metadata,
+          status: 'completed',
+          audioUrl: newAudioUrl ?? metadata.audioUrl,
+          transcript: result.summary,
+          notes: result.notes,
+          actionItems: result.actionItems,
+        };
+
+        await this.saveRecording(completed);
+        onUpdate(completed);
+
+        console.log(`Successfully recovered fallback recording: ${id}`);
+      } catch (err) {
+        if (err instanceof Error && err.message === 'EMPTY_AUDIO') {
+          // Recording had no audio content — delete it entirely
+          await this.deleteRecording(id);
+          onUpdate({ ...metadata, status: 'error' });
+        } else {
+          console.error(`Failed to recover fallback recording ${id}:`, err);
+          // Leave in fallback — will retry next startup
+          onUpdate({ ...metadata, status: 'error' });
+        }
+      }
+    }
+  },
 };

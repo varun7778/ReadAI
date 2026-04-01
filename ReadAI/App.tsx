@@ -94,18 +94,34 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth >= 1024);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'saved'>('idle');
+
   const [searchQuery, setSearchQuery] = useState('');
   const [pendingRecording, setPendingRecording] = useState<{ blob: Blob; duration: number } | null>(null);
   const [pendingRecordingName, setPendingRecordingName] = useState('');
   const [showNoVoicesFound, setShowNoVoicesFound] = useState(false);
+  const [transcriptText, setTranscriptText] = useState<string | null>(null);
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [analyzeAudio, setAnalyzeAudio] = useState(true);
 
-  // Initial Data Fetch from Backend
+  // Initial Data Fetch + Fallback Recovery
   useEffect(() => {
     const fetchData = async () => {
       try {
         const data = await apiService.getRecordings();
         setRecordings(data);
+
+        // Recover any recordings that were saved to fallback/ while backend was down
+        apiService.processFallbackRecordings((recording) => {
+          setRecordings(prev => {
+            const idx = prev.findIndex(r => r.id === recording.id);
+            if (idx > -1) {
+              const next = [...prev];
+              next[idx] = recording;
+              return next;
+            }
+            return [recording, ...prev];
+          });
+        });
       } catch (err) {
         console.error("Backend fetch failed", err);
       } finally {
@@ -152,8 +168,7 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     const recordingTitle = pendingRecordingName.trim() || `Recording ${recordings.length + 1}`;
     setPendingRecording(null);
     setPendingRecordingName('');
-    setSyncStatus('syncing');
-    
+
     const id = Date.now().toString();
     const newRecording: Recording = {
       id,
@@ -181,15 +196,13 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             ...newRecording,
             status: 'completed',
             transcript: result.summary,
+            transcriptUrl: result.transcriptUrl,
             notes: result.notes,
             actionItems: result.actionItems
           };
 
           setRecordings(prev => prev.map(r => r.id === id ? updated : r));
           await apiService.saveRecording(updated);
-
-          setSyncStatus('saved');
-          setTimeout(() => setSyncStatus('idle'), 3000);
         } catch (err) {
           if (err instanceof Error && err.message === 'EMPTY_AUDIO') {
             setRecordings(prev => prev.filter(r => r.id !== id));
@@ -197,11 +210,11 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             setActiveId(prev => prev === id ? null : prev);
             setTimeout(() => setShowNoVoicesFound(false), 3000);
           } else {
+            // Includes BACKEND_UNAVAILABLE — leave as 'error' so startup recovery retries it
             const errorState: Recording = { ...newRecording, status: 'error' };
             setRecordings(prev => prev.map(r => r.id === id ? errorState : r));
             await apiService.saveRecording(errorState);
           }
-          setSyncStatus('idle');
         }
       } catch (err) {
         console.error("Backend synchronization failed", err);
@@ -211,7 +224,6 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
           setActiveId(prev => prev === id ? null : prev);
           setTimeout(() => setShowNoVoicesFound(false), 3000);
         }
-        setSyncStatus('idle');
       }
     };
 
@@ -221,16 +233,12 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const deleteRecording = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (confirm('Permanently delete this cloud recording?')) {
-      setSyncStatus('syncing');
       try {
         await apiService.deleteRecording(id);
         setRecordings(prev => prev.filter(r => r.id !== id));
         if (activeId === id) setActiveId(null);
-        setSyncStatus('saved');
-        setTimeout(() => setSyncStatus('idle'), 2000);
       } catch (err) {
         console.error("Failed to delete from backend", err);
-        setSyncStatus('idle');
       }
     }
   };
@@ -238,7 +246,6 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const updateRecordingTitle = async (id: string, newTitle: string) => {
     if (!newTitle.trim()) return;
     
-    setSyncStatus('syncing');
     try {
       const recording = recordings.find(r => r.id === id);
       if (!recording) return;
@@ -246,11 +253,8 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       const updated: Recording = { ...recording, title: newTitle.trim() };
       setRecordings(prev => prev.map(r => r.id === id ? updated : r));
       await apiService.saveRecording(updated);
-      setSyncStatus('saved');
-      setTimeout(() => setSyncStatus('idle'), 2000);
     } catch (err) {
       console.error("Failed to update recording title", err);
-      setSyncStatus('idle');
     }
   };
 
@@ -434,12 +438,22 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                  Duration: {Math.floor(pendingRecording.duration / 60)}:{(pendingRecording.duration % 60).toString().padStart(2, '0')}
                </p>
                
+               <div className="flex items-center justify-between mb-4 px-1">
+                  <span className="text-zinc-400 text-[10px] font-black uppercase tracking-widest">Analyze Audio</span>
+                  <button
+                    onClick={() => setAnalyzeAudio(prev => !prev)}
+                    className={`relative w-10 h-5 rounded-full transition-colors duration-200 focus:outline-none ${analyzeAudio ? 'bg-indigo-600' : 'bg-zinc-700'}`}
+                  >
+                    <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${analyzeAudio ? 'translate-x-5' : 'translate-x-0'}`} />
+                  </button>
+               </div>
+
                <div className="flex flex-col gap-3">
-                  <button 
+                  <button
                     onClick={startProcessing}
                     className="flex items-center justify-center gap-3 w-full py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-xs font-black uppercase tracking-widest transition-all shadow-xl shadow-indigo-600/20"
                   >
-                    <Wand2 size={16} /> Analyze Audio
+                    <Wand2 size={16} /> {analyzeAudio ? 'Analyze Audio' : 'Generate Notes'}
                   </button>
                   <button 
                     onClick={() => { setPendingRecording(null); setPendingRecordingName(''); }}
@@ -476,10 +490,29 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
               </div>
               
               <div className="flex items-center gap-3">
+                {activeRecording?.transcriptUrl && (
+                  <button
+                    onClick={async () => {
+                      setTranscriptLoading(true);
+                      setTranscriptText(null);
+                      try {
+                        const res = await fetch(activeRecording.transcriptUrl!);
+                        setTranscriptText(await res.text());
+                      } catch {
+                        setTranscriptText('Failed to load transcript.');
+                      } finally {
+                        setTranscriptLoading(false);
+                      }
+                    }}
+                    className="flex items-center gap-3 px-6 py-3.5 bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-white hover:border-zinc-700 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all"
+                  >
+                    <FileText size={14} /> Transcript
+                  </button>
+                )}
                  <button className="flex items-center gap-3 px-6 py-3.5 bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-white hover:border-zinc-700 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all">
-                  <Share2 size={14} /> Export Insight
+                  <Share2 size={14} /> Export
                 </button>
-                <button 
+                <button
                   onClick={() => setActiveId(null)}
                   className="p-3.5 text-zinc-600 hover:text-red-400 hover:bg-red-500/5 rounded-2xl transition-all"
                 >
@@ -567,6 +600,38 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
           </div>
         )}
       </main>
+
+      {/* Transcript Modal */}
+      {(transcriptText !== null || transcriptLoading) && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+          onClick={() => setTranscriptText(null)}
+        >
+          <div
+            className="relative bg-zinc-900 border border-zinc-800 rounded-3xl w-full max-w-2xl max-h-[80vh] flex flex-col"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
+              <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Transcript</span>
+              <button
+                onClick={() => setTranscriptText(null)}
+                className="p-1.5 text-zinc-600 hover:text-white transition-colors rounded-lg"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="overflow-y-auto px-6 py-5 custom-scrollbar">
+              {transcriptLoading ? (
+                <div className="flex justify-center py-10">
+                  <RefreshCw size={20} className="text-indigo-500 animate-spin" />
+                </div>
+              ) : (
+                <p className="text-zinc-300 text-sm leading-relaxed whitespace-pre-wrap">{transcriptText}</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <style>{`
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
