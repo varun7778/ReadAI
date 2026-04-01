@@ -94,7 +94,6 @@ const App: React.FC = () => {
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth >= 1024);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [isProcessingGlobal, setIsProcessingGlobal] = useState(false);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'saved'>('idle');
   const [searchQuery, setSearchQuery] = useState('');
   const [pendingRecording, setPendingRecording] = useState<{ blob: Blob; duration: number } | null>(null);
@@ -168,74 +167,55 @@ const App: React.FC = () => {
 
     // Update Local State Optimistically
     setRecordings(prev => [newRecording, ...prev]);
-    setIsProcessingGlobal(true);
     setActiveId(id); // Automatically navigate to the new item
 
-    
-    try {
-      // Save recording with blob (will be stored in Mega.nz if backend unavailable)
-      await apiService.saveRecording(newRecording, blob);
-
+    // Fire processing in the background — does not block the recorder
+    const runProcessing = async () => {
       try {
-        const result = await apiService.processAudio(blob.type, id, blob);
-        
-        const updated: Recording = { 
-          ...newRecording, 
-          status: 'completed',
-          transcript: result.summary,
-          notes: result.notes,
-          actionItems: result.actionItems
-        };
+        await apiService.saveRecording(newRecording, blob);
 
-        setRecordings(prev => prev.map(r => r.id === id ? updated : r));
-        // Save updated recording (blob already saved, so don't pass it again)
-        await apiService.saveRecording(updated);
-        
-        setSyncStatus('saved');
-        setTimeout(() => setSyncStatus('idle'), 3000);
+        try {
+          const result = await apiService.processAudio(blob.type, id, blob);
+
+          const updated: Recording = {
+            ...newRecording,
+            status: 'completed',
+            transcript: result.summary,
+            notes: result.notes,
+            actionItems: result.actionItems
+          };
+
+          setRecordings(prev => prev.map(r => r.id === id ? updated : r));
+          await apiService.saveRecording(updated);
+
+          setSyncStatus('saved');
+          setTimeout(() => setSyncStatus('idle'), 3000);
+        } catch (err) {
+          if (err instanceof Error && err.message === 'EMPTY_AUDIO') {
+            setRecordings(prev => prev.filter(r => r.id !== id));
+            setShowNoVoicesFound(true);
+            setActiveId(prev => prev === id ? null : prev);
+            setTimeout(() => setShowNoVoicesFound(false), 3000);
+          } else {
+            const errorState: Recording = { ...newRecording, status: 'error' };
+            setRecordings(prev => prev.map(r => r.id === id ? errorState : r));
+            await apiService.saveRecording(errorState);
+          }
+          setSyncStatus('idle');
+        }
       } catch (err) {
-        // If audio was empty and recording was deleted, show "no voices found" screen
+        console.error("Backend synchronization failed", err);
         if (err instanceof Error && err.message === 'EMPTY_AUDIO') {
-          // Remove from state
           setRecordings(prev => prev.filter(r => r.id !== id));
-          // Show "no voices found" screen
           setShowNoVoicesFound(true);
-          setActiveId(null);
-          setPendingRecording(null);
-          console.log('Recording deleted due to empty audio - showing no voices found screen');
-          
-          // Redirect to home after 3 seconds
-          setTimeout(() => {
-            setShowNoVoicesFound(false);
-          }, 3000);
-        } else {
-          const errorState: Recording = { ...newRecording, status: 'error' };
-          setRecordings(prev => prev.map(r => r.id === id ? errorState : r));
-          await apiService.saveRecording(errorState);
+          setActiveId(prev => prev === id ? null : prev);
+          setTimeout(() => setShowNoVoicesFound(false), 3000);
         }
         setSyncStatus('idle');
-      } finally {
-        setIsProcessingGlobal(false);
       }
-    } catch (err) {
-      console.error("Backend synchronization failed", err);
-      // If it's an empty audio error from the outer catch, handle it here too
-      if (err instanceof Error && err.message === 'EMPTY_AUDIO') {
-        setRecordings(prev => prev.filter(r => r.id !== id));
-        setShowNoVoicesFound(true);
-        setActiveId(null);
-        setPendingRecording(null);
-        console.log('Recording deleted due to empty audio - showing no voices found screen');
-        
-        // Redirect to home after 3 seconds
-        setTimeout(() => {
-          setShowNoVoicesFound(false);
-        }, 3000);
-      }
-      // For other errors in saveRecording, just log and continue
-      setIsProcessingGlobal(false);
-      setSyncStatus('idle');
-    }
+    };
+
+    runProcessing();
   };
 
   const deleteRecording = async (id: string, e: React.MouseEvent) => {
@@ -418,7 +398,7 @@ const App: React.FC = () => {
           /* RECORDER VIEW */
           <div className="flex-1 flex flex-col items-center justify-center p-6 animate-in fade-in zoom-in-95 duration-700">
             <div className="w-full max-w-sm">
-              <Recorder onRecordingComplete={handleRecordingComplete} isProcessing={isProcessingGlobal} />
+              <Recorder onRecordingComplete={handleRecordingComplete} isProcessing={!!pendingRecording} />
               <div className="mt-14 text-center">
                 <p className="text-zinc-700 text-[10px] font-black uppercase tracking-[0.4em] mb-1">
                   Ready to Capture

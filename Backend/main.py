@@ -206,16 +206,15 @@ class SpeakerDiarizationPipeline:
         self.batch_size = batch_size
 
         # Auto-detect device and matching compute type
+        # WhisperX (CTranslate2) only supports cuda and cpu — not mps
         if device:
             self.device = device
             self.compute_type = compute_type or "float16"
         elif torch.cuda.is_available():
             self.device = "cuda"
             self.compute_type = compute_type or "float16"
-        elif torch.backends.mps.is_available():
-            self.device = "mps"
-            self.compute_type = compute_type or "float32"  # float16 unstable on MPS
         else:
+            # Apple Silicon (MPS) falls back to CPU with int8 — fast on M-series chips
             self.device = "cpu"
             self.compute_type = compute_type or "int8"
 
