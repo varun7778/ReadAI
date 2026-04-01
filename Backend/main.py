@@ -305,18 +305,41 @@ class SpeakerDiarizationPipeline:
         """Perform speaker diarization"""
         logger.info("Performing speaker diarization...")
         
-        diarization = self.diarization(audio_path)
+        import torchaudio
+        waveform, sample_rate = torchaudio.load(audio_path)
+        
+        # pyannote 4.x expects a dict with waveform and sample_rate
+        audio_input = {
+            "waveform": waveform,
+            "sample_rate": sample_rate,
+        }
+        
+        diarization_output = self.diarization(audio_input)
         
         segments = []
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
-            segments.append({
-                'start': turn.start,
-                'end': turn.end,
-                'speaker': speaker
-            })
+        
+        if hasattr(diarization_output, 'to_annotation'):
+            annotation = diarization_output.to_annotation()
+            for turn, _, speaker in annotation.itertracks(yield_label=True):
+                segments.append({
+                    'start': turn.start,
+                    'end': turn.end,
+                    'speaker': speaker
+                })
+        elif hasattr(diarization_output, 'itertracks'):
+            for turn, _, speaker in diarization_output.itertracks(yield_label=True):
+                segments.append({
+                    'start': turn.start,
+                    'end': turn.end,
+                    'speaker': speaker
+                })
+        else:
+            raise RuntimeError(f"Unexpected diarization output type: {type(diarization_output)}")
         
         return segments
     
+
+
     def merge_diarization(self, aligned_transcript: Dict, diarization: List[Dict]) -> List[TranscriptSegment]:
         """Merge transcription with speaker labels"""
         logger.info("Merging transcription with diarization...")

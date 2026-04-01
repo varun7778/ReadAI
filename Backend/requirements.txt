@@ -1,4 +1,7 @@
 # Core dependencies
+av>=14.0.0
+faster-whisper>=1.2.0
+
 whisperx
 pyannote.audio
 tiktoken
@@ -6,12 +9,11 @@ hf_xet
 
 # PyTorch — Mac (Apple Silicon): pip install -r requirements.txt
 # Windows/Linux CUDA: pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu121
-torch>=2.0.0,<2.1.0
+torch
 torchvision
-torchaudio>=2.0.0,<2.1.0
+torchaudio
 
 # Additional required dependencies
-faster-whisper
 transformers
 pyannote.core
 
@@ -21,7 +23,6 @@ python-multipart
 pydantic
 python-dotenv
 uuid
-
 
 langchain[google-genai]
 langchain[openai]
