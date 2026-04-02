@@ -5,6 +5,7 @@ import { Recording } from './types';
 import { apiService } from './services/apiService';
 import Recorder from './components/Recorder';
 import RecordingCard from './components/RecordingCard';
+import LanguageAnalysisView from './components/LanguageAnalysisView';
 import { supabaseService } from './services/SupabaseService';
 
 interface TitleEditorProps {
@@ -177,7 +178,8 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       duration,
       status: 'processing',
       notes: [],
-      actionItems: []
+      actionItems: [],
+      useLanguageAnalysis: analyzeAudio,
     };
 
     // Update Local State Optimistically
@@ -190,16 +192,22 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         await apiService.saveRecording(newRecording, blob);
 
         try {
-          const result = await apiService.processAudio(blob.type, id, blob);
+          let updated: Recording;
 
-          const updated: Recording = {
-            ...newRecording,
-            status: 'completed',
-            transcript: result.summary,
-            transcriptUrl: result.transcriptUrl,
-            notes: result.notes,
-            actionItems: result.actionItems
-          };
+          if (analyzeAudio) {
+            const analysis = await apiService.processAudioForAnalysis(blob.type, id, blob, duration);
+            updated = { ...newRecording, status: 'completed', languageAnalysis: analysis };
+          } else {
+            const result = await apiService.processAudio(blob.type, id, blob);
+            updated = {
+              ...newRecording,
+              status: 'completed',
+              transcript: result.summary,
+              transcriptUrl: result.transcriptUrl,
+              notes: result.notes,
+              actionItems: result.actionItems,
+            };
+          }
 
           setRecordings(prev => prev.map(r => r.id === id ? updated : r));
           await apiService.saveRecording(updated);
@@ -543,6 +551,9 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                     <p className="text-zinc-600 text-[11px] font-bold uppercase tracking-[0.2em] mt-3">AI Synthesis in progress...</p>
                   </div>
                 ) : activeRecording.status === 'completed' ? (
+                  activeRecording.languageAnalysis ? (
+                    <LanguageAnalysisView recording={activeRecording} />
+                  ) : (
                   <>
                     <section className="animate-in fade-in slide-in-from-bottom-8 duration-700 delay-100">
                       <div className="flex items-center gap-3 mb-8">
@@ -586,6 +597,7 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                       </section>
                     </div>
                   </>
+                  )
                 ) : (
                   <div className="py-24 flex flex-col items-center text-center">
                     <div className="p-6 bg-red-500/5 rounded-[2rem] border border-red-500/10 mb-8">

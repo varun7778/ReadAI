@@ -1,5 +1,5 @@
 
-import { Recording, GeminiResponse } from "../types";
+import { Recording, GeminiResponse, LanguageAnalysisResult, MetricsHistoryPoint, SlangEntry, RecurringCorrection } from "../types";
 import { supabaseService } from "./SupabaseService";
 
 const API_BASE_URL = (import.meta as any).env?.VITE_API_URL;
@@ -203,6 +203,95 @@ export const apiService = {
   },
 
   /**
+   * Language analysis pipeline (toggle ON).
+   * Transcribes the audio then runs the full language improvement analysis.
+   */
+  async processAudioForAnalysis(
+    mimeType: string,
+    recordingId: string,
+    audioBlob: Blob,
+    durationSeconds: number,
+  ): Promise<LanguageAnalysisResult> {
+    const available = await isBackendAvailable();
+    if (!available) throw new Error('BACKEND_UNAVAILABLE');
+
+    // Step 1: Transcribe (same as processAudio)
+    const formData = new FormData();
+    formData.append('file', new File([audioBlob], `${recordingId}.mp3`, { type: mimeType }));
+    formData.append('formats', 'txt,json');
+    formData.append('recording_id', recordingId);
+
+    const transcribeResponse = await fetch(`${API_BASE_URL}/transcribe`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!transcribeResponse.ok) throw new Error(`Failed to upload audio: ${transcribeResponse.statusText}`);
+
+    const { job_id: jobId } = await transcribeResponse.json();
+
+    // Step 2: Poll for completion
+    let status = 'queued';
+    let attempts = 0;
+    while (status !== 'completed' && status !== 'failed' && attempts < 200) {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      const statusResponse = await fetch(`${API_BASE_URL}/status/${jobId}`);
+      if (!statusResponse.ok) throw new Error(`Failed to check status: ${statusResponse.statusText}`);
+      const statusData = await statusResponse.json();
+      status = statusData.status;
+      attempts++;
+      if (status === 'failed') throw new Error(statusData.error || 'Processing failed');
+    }
+    if (status !== 'completed') throw new Error('Processing timed out');
+
+    // Step 3: Extract plain transcript text from segments
+    const finalStatus = await (await fetch(`${API_BASE_URL}/status/${jobId}`)).json();
+    const segments: any[] = finalStatus.result?.segments || [];
+    const hasContent = segments.some((seg: any) => (seg.text || '').trim().length > 0);
+
+    if (!hasContent) {
+      await this.deleteRecording(recordingId).catch(() => {});
+      throw new Error('EMPTY_AUDIO');
+    }
+
+    // Strip speaker labels — language analysis needs clean text only
+    const plainTranscript = segments
+      .filter((seg: any) => (seg.text || '').trim())
+      .map((seg: any) => seg.text.trim())
+      .join(' ');
+
+    // Step 4: Run language analysis pipeline
+    const analysisResponse = await fetch(`${API_BASE_URL}/api/sessions/new`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transcript: plainTranscript, duration_seconds: durationSeconds }),
+    });
+    if (!analysisResponse.ok) {
+      const err = await analysisResponse.json().catch(() => ({}));
+      throw new Error(err.detail || `Language analysis failed: ${analysisResponse.statusText}`);
+    }
+
+    return await analysisResponse.json() as LanguageAnalysisResult;
+  },
+
+  async getMetricsHistory(): Promise<MetricsHistoryPoint[]> {
+    const response = await fetch(`${API_BASE_URL}/api/metrics/history`);
+    if (!response.ok) throw new Error('Failed to fetch metrics history');
+    return response.json();
+  },
+
+  async getRecurringCorrections(): Promise<RecurringCorrection[]> {
+    const response = await fetch(`${API_BASE_URL}/api/corrections/recurring`);
+    if (!response.ok) throw new Error('Failed to fetch recurring corrections');
+    return response.json();
+  },
+
+  async getSlangBank(): Promise<SlangEntry[]> {
+    const response = await fetch(`${API_BASE_URL}/api/slang`);
+    if (!response.ok) throw new Error('Failed to fetch slang bank');
+    return response.json();
+  },
+
+  /**
    * Called on startup. Finds any recordings in Supabase 'fallback/' that haven't been
    * processed yet, attempts to process them, and promotes them to 'recordings/' on success.
    *
@@ -234,20 +323,29 @@ export const apiService = {
         const blob = await supabaseService.downloadAudio(`${id}.mp3`, 'fallback');
         if (!blob) throw new Error(`Audio blob missing for ${id}`);
 
-        // Process through backend
-        const result = await this.processAudio('audio/mpeg', id, blob);
-
-        // Move audio from fallback/ to recordings/ and get new URL
+        // Process through backend — use the same pipeline that was active when recorded
         const newAudioUrl = await supabaseService.promoteFromFallback(id);
+        let completed: Recording;
 
-        const completed: Recording = {
-          ...metadata,
-          status: 'completed',
-          audioUrl: newAudioUrl ?? metadata.audioUrl,
-          transcript: result.summary,
-          notes: result.notes,
-          actionItems: result.actionItems,
-        };
+        if (metadata.useLanguageAnalysis) {
+          const analysis = await this.processAudioForAnalysis('audio/mpeg', id, blob, metadata.duration);
+          completed = {
+            ...metadata,
+            status: 'completed',
+            audioUrl: newAudioUrl ?? metadata.audioUrl,
+            languageAnalysis: analysis,
+          };
+        } else {
+          const result = await this.processAudio('audio/mpeg', id, blob);
+          completed = {
+            ...metadata,
+            status: 'completed',
+            audioUrl: newAudioUrl ?? metadata.audioUrl,
+            transcript: result.summary,
+            notes: result.notes,
+            actionItems: result.actionItems,
+          };
+        }
 
         await this.saveRecording(completed);
         onUpdate(completed);

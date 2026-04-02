@@ -28,6 +28,16 @@ import os
 
 load_dotenv()
 
+from language_analyzer import (
+    init_db as init_language_db,
+    run_analysis,
+    get_all_sessions,
+    get_session_detail,
+    get_metrics_history,
+    get_recurring_corrections,
+    get_slang_bank,
+)
+
 # Allow OmegaConf classes for pyannote model loading
 torch.serialization.add_safe_globals([
     'omegaconf.listconfig.ListConfig',
@@ -789,6 +799,7 @@ async def process_supabase_recordings():
 async def startup_event():
     """Run on application startup"""
     logger.info("Application starting up...")
+    init_language_db()
     # Process any pending recordings from Supabase
     await process_supabase_recordings()
     logger.info("Startup complete")
@@ -1126,6 +1137,58 @@ async def generate_notes(job_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate notes: {str(e)}")
 
+
+
+# ─── Language Tracker Endpoints ──────────────────────────────────────────────
+
+class NewSessionRequest(BaseModel):
+    transcript: str
+    duration_seconds: int
+
+
+@app.post("/api/sessions/new")
+async def new_session(req: NewSessionRequest):
+    """Run the full language analysis pipeline on a transcript."""
+    if not req.transcript.strip():
+        raise HTTPException(status_code=400, detail="Transcript is empty")
+    try:
+        result = run_analysis(req.transcript, req.duration_seconds)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=502, detail=f"Claude response error: {e}")
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"Language analysis failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+
+
+@app.get("/api/sessions")
+async def list_sessions():
+    return get_all_sessions()
+
+
+@app.get("/api/sessions/{session_id}")
+async def get_session(session_id: int):
+    detail = get_session_detail(session_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return detail
+
+
+@app.get("/api/metrics/history")
+async def metrics_history():
+    return get_metrics_history(limit=10)
+
+
+@app.get("/api/corrections/recurring")
+async def recurring_corrections():
+    return get_recurring_corrections()
+
+
+@app.get("/api/slang")
+async def slang_bank():
+    return get_slang_bank()
 
 
 if __name__ == "__main__":
