@@ -1,11 +1,11 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Plus, Trash2, CheckCircle2, ListTodo, FileText, Share2, Info, X, CloudUpload, RefreshCw, Menu, Wand2, Trash, MicOff, Edit2, Check } from 'lucide-react';
+import { Search, Plus, Trash2, CheckCircle2, ListTodo, FileText, Share2, Info, X, CloudUpload, RefreshCw, Menu, Wand2, Trash, MicOff, Edit2, Check, TrendingUp, BookOpen } from 'lucide-react';
 import { Recording } from './types';
 import { apiService } from './services/apiService';
 import Recorder from './components/Recorder';
 import RecordingCard from './components/RecordingCard';
-import LanguageAnalysisView from './components/LanguageAnalysisView';
+import LanguageAnalysisView, { ProgressTab, PhraseBankTab } from './components/LanguageAnalysisView';
 import { supabaseService } from './services/SupabaseService';
 
 interface TitleEditorProps {
@@ -103,6 +103,7 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [transcriptText, setTranscriptText] = useState<string | null>(null);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
   const [analyzeAudio, setAnalyzeAudio] = useState(true);
+  const [mainView, setMainView] = useState<'recording' | 'progress' | 'phraseBank'>('recording');
 
   // Initial Data Fetch + Fallback Recovery
   useEffect(() => {
@@ -196,7 +197,7 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
           if (analyzeAudio) {
             const analysis = await apiService.processAudioForAnalysis(blob.type, id, blob, duration);
-            updated = { ...newRecording, status: 'completed', languageAnalysis: analysis };
+            updated = { ...newRecording, status: 'completed', transcript: analysis._plainTranscript, languageAnalysis: analysis };
           } else {
             const result = await apiService.processAudio(blob.type, id, blob);
             updated = {
@@ -242,7 +243,13 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     e.stopPropagation();
     if (confirm('Permanently delete this cloud recording?')) {
       try {
+        const recording = recordings.find(r => r.id === id);
         await apiService.deleteRecording(id);
+        if (recording?.languageAnalysis?.sessionId) {
+          await apiService.deleteLanguageSession(recording.languageAnalysis.sessionId).catch((err: unknown) =>
+            console.error("Failed to delete language session", err)
+          );
+        }
         setRecordings(prev => prev.filter(r => r.id !== id));
         if (activeId === id) setActiveId(null);
       } catch (err) {
@@ -291,7 +298,7 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       `}>
         <div className="p-6 h-full flex flex-col">
           <div className="flex items-center justify-between mb-8">
-            <div className="flex items-center gap-2 cursor-pointer group" onClick={() => { setActiveId(null); closeSidebar(); setPendingRecording(null); }}>
+            <div className="flex items-center gap-2 cursor-pointer group" onClick={() => { setActiveId(null); setMainView('recording'); closeSidebar(); setPendingRecording(null); setPendingRecordingName(''); }}>
               <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center shadow-lg shadow-indigo-600/40 group-hover:scale-110 transition-transform">
                 <div className="w-1 h-4 bg-white rounded-full mx-0.5" />
                 <div className="w-1 h-6 bg-white rounded-full mx-0.5" />
@@ -315,8 +322,23 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             />
           </div>
 
+          <div className="flex flex-col gap-1 mb-5">
+            <button
+              onClick={() => { setMainView('progress'); closeSidebar(); }}
+              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${mainView === 'progress' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60'}`}
+            >
+              <TrendingUp size={14} /> Progress
+            </button>
+            <button
+              onClick={() => { setMainView('phraseBank'); closeSidebar(); }}
+              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${mainView === 'phraseBank' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60'}`}
+            >
+              <BookOpen size={14} /> Phrase Bank
+            </button>
+          </div>
+
           <div className="flex items-center justify-between mb-4 px-1">
-            <span className="text-[9px] font-black text-zinc-600 uppercase tracking-[0.4em]">Archive</span>
+            <span className="text-[9px] font-black text-zinc-600 uppercase tracking-[0.4em]">Recordings</span>
             {isInitialLoading && <RefreshCw size={10} className="text-indigo-500 animate-spin" />}
           </div>
 
@@ -335,7 +357,7 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                   <RecordingCard 
                     recording={r} 
                     isActive={activeId === r.id} 
-                    onClick={() => { setActiveId(r.id); closeSidebar(); setPendingRecording(null); setPendingRecordingName(''); }}
+                    onClick={() => { setActiveId(r.id); setMainView('recording'); closeSidebar(); setPendingRecording(null); setPendingRecordingName(''); }}
                     onTitleUpdate={updateRecordingTitle}
                   />
                   <button 
@@ -377,7 +399,7 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
           <div>
             {(activeId || pendingRecording) && (
               <button 
-                onClick={() => { setActiveId(null); setPendingRecording(null); setPendingRecordingName(''); }} 
+                onClick={() => { setActiveId(null); setMainView('recording'); setPendingRecording(null); setPendingRecordingName(''); }} 
                 className="flex items-center gap-2 px-4 py-2 text-zinc-400 hover:text-zinc-100 text-[10px] font-black uppercase tracking-widest transition-all hover:bg-zinc-900 rounded-xl"
               >
                 <Plus size={14} /> New Capture
@@ -387,7 +409,27 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         </header>
 
         {/* Dynamic Views */}
-        {showNoVoicesFound ? (
+        {mainView === 'progress' ? (
+          <div className="flex-1 overflow-y-auto px-6 md:px-12 py-10 custom-scrollbar">
+            <div className="max-w-5xl mx-auto">
+              <div className="flex items-center gap-3 mb-10">
+                <TrendingUp size={18} className="text-indigo-400" />
+                <h2 className="text-[10px] font-black uppercase tracking-[0.4em] text-zinc-400">Progress</h2>
+              </div>
+              <ProgressTab />
+            </div>
+          </div>
+        ) : mainView === 'phraseBank' ? (
+          <div className="flex-1 overflow-y-auto px-6 md:px-12 py-10 custom-scrollbar">
+            <div className="max-w-5xl mx-auto">
+              <div className="flex items-center gap-3 mb-10">
+                <BookOpen size={18} className="text-indigo-400" />
+                <h2 className="text-[10px] font-black uppercase tracking-[0.4em] text-zinc-400">Phrase Bank</h2>
+              </div>
+              <PhraseBankTab />
+            </div>
+          </div>
+        ) : showNoVoicesFound ? (
           /* NO VOICES FOUND VIEW */
           <div className="flex-1 flex flex-col items-center justify-center p-6 animate-in fade-in zoom-in-95 duration-700">
             <div className="w-full max-w-sm p-10 bg-zinc-900/30 border border-zinc-800/40 rounded-[3rem] backdrop-blur-3xl text-center">
@@ -498,14 +540,18 @@ const App: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
               </div>
               
               <div className="flex items-center gap-3">
-                {activeRecording?.transcriptUrl && (
+                {(activeRecording?.transcriptUrl || activeRecording?.transcript) && (
                   <button
                     onClick={async () => {
                       setTranscriptLoading(true);
                       setTranscriptText(null);
                       try {
-                        const res = await fetch(activeRecording.transcriptUrl!);
-                        setTranscriptText(await res.text());
+                        if (activeRecording.transcriptUrl) {
+                          const res = await fetch(activeRecording.transcriptUrl);
+                          setTranscriptText(await res.text());
+                        } else {
+                          setTranscriptText(activeRecording.transcript!);
+                        }
                       } catch {
                         setTranscriptText('Failed to load transcript.');
                       } finally {

@@ -462,3 +462,39 @@ def get_slang_bank() -> list:
         return [dict(r) for r in rows]
     finally:
         conn.close()
+
+
+def delete_session(session_id: int):
+    """
+    Delete a session and all its associated data.
+    For slang_bank entries that were first used in this session, decrement use_count
+    and remove the entry if it reaches 0.
+    """
+    conn = get_db()
+    try:
+        # Get slang terms used in this session to decrement counts
+        slang_rows = conn.execute("""
+            SELECT sb.id, sb.use_count, sb.term
+            FROM slang_bank sb
+            WHERE sb.first_used_date = (
+                SELECT session_date FROM sessions WHERE id = ?
+            )
+        """, (session_id,)).fetchall()
+
+        # Decrement use_count for slang linked to this session's date;
+        # remove entirely if count drops to 0
+        for row in slang_rows:
+            if row["use_count"] <= 1:
+                conn.execute("DELETE FROM slang_bank WHERE id = ?", (row["id"],))
+            else:
+                conn.execute("UPDATE slang_bank SET use_count = use_count - 1 WHERE id = ?", (row["id"],))
+
+        conn.execute("DELETE FROM corrections WHERE session_id = ?", (session_id,))
+        conn.execute("DELETE FROM metrics WHERE session_id = ?", (session_id,))
+        conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()

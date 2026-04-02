@@ -194,7 +194,7 @@ const ThisSessionTab: React.FC<{ recording: Recording }> = ({ recording }) => {
 
 // ─── Tab 2 — Progress ─────────────────────────────────────────────────────────
 
-const ProgressTab: React.FC = () => {
+export const ProgressTab: React.FC = () => {
   const [history, setHistory] = useState<MetricsHistoryPoint[]>([]);
   const [recurring, setRecurring] = useState<RecurringCorrection[]>([]);
   const [loading, setLoading] = useState(true);
@@ -278,7 +278,7 @@ const ProgressTab: React.FC = () => {
 
 // ─── Tab 3 — Phrase Bank ──────────────────────────────────────────────────────
 
-const PhraseBankTab: React.FC = () => {
+export const PhraseBankTab: React.FC = () => {
   const [slang, setSlang] = useState<SlangEntry[]>([]);
   const [allCorrections, setAllCorrections] = useState<any[]>([]);
   const [search, setSearch] = useState('');
@@ -392,34 +392,10 @@ const PhraseBankTab: React.FC = () => {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-const TABS = ['This Session', 'Progress', 'Phrase Bank'] as const;
-type Tab = typeof TABS[number];
-
 const LanguageAnalysisView: React.FC<Props> = ({ recording }) => {
-  const [activeTab, setActiveTab] = useState<Tab>('This Session');
-
   return (
     <div className="animate-in fade-in slide-in-from-bottom-8 duration-700">
-      {/* Tab bar */}
-      <div className="flex gap-1 mb-8 bg-zinc-900/40 border border-zinc-800/50 rounded-2xl p-1 w-fit">
-        {TABS.map(tab => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={`px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
-              activeTab === tab
-                ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20'
-                : 'text-zinc-500 hover:text-zinc-300'
-            }`}
-          >
-            {tab}
-          </button>
-        ))}
-      </div>
-
-      {activeTab === 'This Session' && <ThisSessionTab recording={recording} />}
-      {activeTab === 'Progress' && <ProgressTab />}
-      {activeTab === 'Phrase Bank' && <PhraseBankTab />}
+      <ThisSessionTab recording={recording} />
     </div>
   );
 };

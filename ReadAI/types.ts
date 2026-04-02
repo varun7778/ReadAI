@@ -42,6 +42,7 @@ export interface Recording {
     strengths: string[];
     focusAreas: string[];
     progressVsLastSession: string;
+    _plainTranscript?: string;
   }
 
   export interface MetricsHistoryPoint {

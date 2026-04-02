@@ -254,10 +254,22 @@ export const apiService = {
     }
 
     // Strip speaker labels — language analysis needs clean text only
+    // Group into sentences by joining short segments, then separate by newline
     const plainTranscript = segments
       .filter((seg: any) => (seg.text || '').trim())
       .map((seg: any) => seg.text.trim())
-      .join(' ');
+      .reduce((acc: string[], seg: string) => {
+        const prev = acc[acc.length - 1] ?? '';
+        // Start a new line after sentence-ending punctuation or every ~15 words
+        const wordCount = prev.split(' ').length;
+        if (!acc.length || /[.?!]$/.test(prev) || wordCount >= 15) {
+          acc.push(seg);
+        } else {
+          acc[acc.length - 1] = prev + ' ' + seg;
+        }
+        return acc;
+      }, [] as string[])
+      .join('\n');
 
     // Step 4: Run language analysis pipeline
     const analysisResponse = await fetch(`${API_BASE_URL}/api/sessions/new`, {
@@ -270,7 +282,7 @@ export const apiService = {
       throw new Error(err.detail || `Language analysis failed: ${analysisResponse.statusText}`);
     }
 
-    return await analysisResponse.json() as LanguageAnalysisResult;
+    return { ...(await analysisResponse.json() as LanguageAnalysisResult), _plainTranscript: plainTranscript };
   },
 
   async getMetricsHistory(): Promise<MetricsHistoryPoint[]> {
@@ -289,6 +301,11 @@ export const apiService = {
     const response = await fetch(`${API_BASE_URL}/api/slang`);
     if (!response.ok) throw new Error('Failed to fetch slang bank');
     return response.json();
+  },
+
+  async deleteLanguageSession(sessionId: number): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/api/sessions/${sessionId}`, { method: 'DELETE' });
+    if (!response.ok) throw new Error(`Failed to delete language session: ${response.statusText}`);
   },
 
   /**

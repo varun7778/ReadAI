@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Clock, ChevronRight, FileAudio, Circle, Edit2, Check, X } from 'lucide-react';
+import { Clock, ChevronRight, FileAudio, Mic, Circle, Edit2, Check, X } from 'lucide-react';
 import { Recording } from '../types';
 
 interface RecordingCardProps {
@@ -74,11 +74,13 @@ const RecordingCard: React.FC<RecordingCardProps> = ({ recording, isActive, onCl
     >
       <div className="flex items-center gap-3">
         <div className={`p-2 rounded-lg transition-colors ${
-          isActive 
-            ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' 
+          isActive
+            ? recording.useLanguageAnalysis
+              ? 'bg-violet-600 text-white shadow-lg shadow-violet-600/20'
+              : 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20'
             : 'bg-zinc-900 text-zinc-500 group-hover:text-zinc-300'
         }`}>
-          <FileAudio size={16} />
+          {recording.useLanguageAnalysis ? <Mic size={16} /> : <FileAudio size={16} />}
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-0.5">

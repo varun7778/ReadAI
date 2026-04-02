@@ -36,6 +36,7 @@ from language_analyzer import (
     get_metrics_history,
     get_recurring_corrections,
     get_slang_bank,
+    delete_session,
 )
 
 # Allow OmegaConf classes for pyannote model loading
@@ -1189,6 +1190,16 @@ async def recurring_corrections():
 @app.get("/api/slang")
 async def slang_bank():
     return get_slang_bank()
+
+
+@app.delete("/api/sessions/{session_id}")
+async def delete_session_endpoint(session_id: int):
+    try:
+        delete_session(session_id)
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"Failed to delete session {session_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
