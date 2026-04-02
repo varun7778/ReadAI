@@ -223,11 +223,16 @@ def call_gemini(transcript: str, hard_metrics: dict, profile: Optional[str], rec
     prompt = _build_user_prompt(transcript, hard_metrics, profile, recent)
     messages = [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)]
 
-    raw = model.invoke(messages).content.strip()
+    def _extract_text(content) -> str:
+        if isinstance(content, list):
+            return "".join(c.get("text", "") if isinstance(c, dict) else str(c) for c in content).strip()
+        return str(content).strip()
 
-    # Strip accidental markdown fences
-    raw = re.sub(r"^```(?:json)?\s*", "", raw)
-    raw = re.sub(r"\s*```$", "", raw)
+    def _clean(raw: str) -> str:
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        return re.sub(r"\s*```$", "", raw)
+
+    raw = _clean(_extract_text(model.invoke(messages).content))
 
     try:
         return json.loads(raw)
@@ -236,9 +241,7 @@ def call_gemini(transcript: str, hard_metrics: dict, profile: Optional[str], rec
         retry_messages = messages + [
             HumanMessage(content=f"You returned invalid JSON:\n{raw}\n\nFix it and return only the corrected JSON object."),
         ]
-        raw2 = model.invoke(retry_messages).content.strip()
-        raw2 = re.sub(r"^```(?:json)?\s*", "", raw2)
-        raw2 = re.sub(r"\s*```$", "", raw2)
+        raw2 = _clean(_extract_text(model.invoke(retry_messages).content))
         return json.loads(raw2)
 
 
